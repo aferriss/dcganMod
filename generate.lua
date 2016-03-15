@@ -14,8 +14,9 @@ opt = {
     display = 1,           -- Display image: 0 = false, 1 = true
     nz = 100,              
 }
+
 for k,v in pairs(opt) do opt[k] = tonumber(os.getenv(k)) or os.getenv(k) or opt[k] end
-print(opt)
+-- print(opt)
 if opt.display == 0 then opt.display = false end
 
 assert(net ~= '', 'provide a generator model')
@@ -29,7 +30,7 @@ if torch.type(net:get(1)) == 'nn.View' then
     net:remove(1)
 end
 
-print(net)
+-- print(net)
 
 if opt.noisetype == 'uniform' then
     noise:uniform(-1, 1)
@@ -39,6 +40,43 @@ end
 
 noiseL = torch.FloatTensor(opt.nz):uniform(-1, 1)
 noiseR = torch.FloatTensor(opt.nz):uniform(-1, 1)
+
+function round(num, idp)
+  local mult = 10^(idp or 0)
+  return math.floor(num * mult + 0.5) / mult
+end
+print "bouta get uff"
+
+function OneHot(X, n, negative_class)
+	xSize = X:size(1)
+	Xoh = torch.Tensor(xSize, n):fill(0)
+	lin = torch.linspace(1, xSize, xSize)
+	for j = 1, X:size(1) do
+		Xoh[j][X[j]+1] = 1 
+	end
+
+	return Xoh
+end
+
+ny = 100
+function get_buffer_y(steps, num_buffer_samples, num_buffer_steps)
+	num_buffer_rows = math.floor( math.ceil( num_buffer_samples / steps ))
+	targets = torch.Tensor(num_buffer_rows, steps):zero()
+	for _ = 0, num_buffer_rows-1 do
+		for i = 0, steps-1 do
+			targets[_+1][i+1] = math.floor(round(_*steps+i/num_buffer_steps, 1))
+		end
+	end
+
+	targets = targets:view(targets:nElement())
+
+	
+	ymb = OneHot(targets, ny, 0)
+	return ymb
+end
+
+--get_buffer_y(5, 10, 2)
+
 if opt.noisemode == 'line' then
    -- do a linear interpolation in Z space between point A and point B
    -- each sample in the mini-batch is a point on the line
@@ -62,31 +100,149 @@ elseif opt.noisemode == 'linefull' then
     for i = 1, opt.imsize do
         noise:narrow(3, i, 1):narrow(4, i, 1):copy(noiseL * line[i] + noiseR * (1 - line[i]))
     end
+
+    print(noise:size())
+elseif opt.noisemode == 'adam' then
+
+
+
+	classes = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 1}
+	steps = 10 
+	num_buffer_classes = 1
+	bymb = get_buffer_y(steps, num_buffer_classes, 1)
+	offset = bymb:size(1)
+
+
+	numTargets = table.getn(classes)
+	targets = torch.Tensor(numTargets, steps):zero()
+	for _ = 0, numTargets-1 do
+		for i = 0, steps-1 do
+			targets[_+1][i+1] = classes[i+1]
+		end
+	end 
+
+	ymb = OneHot(targets:view(targets:nElement()), ny)
+
+	-- ymb = torch.cat(bymb, ymb, 1)
+
+
+	for i = 1, numTargets do
+		y1 = classes[i]
+		y2 = classes[math.fmod(((i)+1), numTargets)]
+		if y2 == nil then
+			 y2 = classes[1]
+		end
+		-- print (y2)
+		for j =1, steps do
+			
+			y = 1 + steps * (i-1) + (j-1)
+			print (y)
+			-- if y < ymb:size(1) then
+				ymb[y] = torch.Tensor(ny):fill(0)
+				if y1 == y2 then
+					ymb[y] = torch.Tensor(ny):zero()
+				else
+					-- print(y)
+					ymb[y][y1] = 1.0 - (j) / (steps-1.0)
+					ymb[y][y2] = (j) / (steps - 1.0)
+				end
+			-- end
+		end
+		-- print(y2)
+	end
+
+	-- print(ymb)
+	ymb = ymb:resize(ymb:size(1), ymb:size(2), 1, 1)
+	-- print (offset)
+end
+local inc = 0
+
+
+function feedAndSave()
+	if opt.gpu > 0 then
+	    require 'cunn'
+	    require 'cudnn'
+	    net:cuda()
+	    util.cudnn(net)
+	    noise = noise:cuda()
+	    ymb = ymb:cuda()
+	else
+	   net:float()
+	end
+
+	-- a function to setup double-buffering across the network.
+	-- this drastically reduces the memory needed to generate samples
+	util.optimizeInferenceMemory(net)
+
+	local images = net:forward(ymb)
+	--images = images:view(images:size(1), 1, images:size(2), images:size(3))
+	print(images:size())
+	print('Images size: ', images:size(1)..' x '..images:size(2) ..' x '..images:size(3)..' x '..images:size(4))
+	--images:add(1):mul(0.5)
+	--print('Min, Max, Mean, Stdv', images:min(), images:max(), images:mean(), images:std())
+
+	local ts = os.time()
+	local tss = string.format(os.date('%Y-%m-%d-%H-%M-%S', ts))
+	local fileCount = string.format("%05d", inc)
+	image.save("savedImages/" .. tss .. '.png', image.toDisplayTensor(images))
+	--print('Saved image to: ', opt.name .. '.png')
+
+	if opt.display then
+	    disp = require 'display'
+	    disp.image(images,{win=1000, title="blah"})
+	    print('Displayed image')
+	end
+
+	--addNoise()
 end
 
-if opt.gpu > 0 then
-    require 'cunn'
-    require 'cudnn'
-    net:cuda()
-    util.cudnn(net)
-    noise = noise:cuda()
-else
-   net:float()
+
+
+
+
+function addNoise()
+	-- print(noise:size())
+	--print(noise[1][1][1]:size())
+	local valToAdd = torch.Tensor(noise:size(3) , noise:size(4)):fill(0.005)
+	local valToSub = torch.Tensor(noise:size(3) , noise:size(4)):fill(-1.0)
+	valToAdd = valToAdd:cuda()
+	--print(noise[1][1]:size())
+	for j =1, noise:size(1) do
+		for i=1, noise:size(2) do
+			noise[j][i]:add(valToAdd)
+			-- local noiseMax = torch.max(noise[1][i])
+			-- if noiseMax > 10 then
+			-- 	noise[1][i]:add(valToSub)
+			-- end
+			--noise[1][i]:mod(10)
+
+			for y=1, noise:size(3) do
+				for x=1, noise:size(4) do
+					--noise[1][i][y][x] = noise[1][i][y][x] + 0.01
+
+					if noise[j][i][y][x] > 3 then 
+						noise[j][i][y][x] = -2-- torch.normal()
+					end
+				end
+			end
+		end
+	end
+
+
+	-- for i=1, opt.imsize do
+	-- 	noise:narrow(3, i, 1):narrow(4, i, 1)[1][i][1][1] = noise:narrow(3, i, 1):narrow(4, i, 1)[1][i][1][1] + 0.1
+	-- 	--local pos = noise:narrow(3, i, 1):narrow(4, i, 1)
+	-- 	--print(pos)
+	-- 	if  noise:narrow(3, i, 1):narrow(4, i, 1)[1][i][1][1] >= 2 then
+	-- 		noise:narrow(3, i, 1):narrow(4, i, 1)[1][i][1][1] = -1
+	-- 	end
+	-- end
+	inc = inc+1
+	feedAndSave()
 end
 
--- a function to setup double-buffering across the network.
--- this drastically reduces the memory needed to generate samples
-util.optimizeInferenceMemory(net)
-
-local images = net:forward(noise)
-print('Images size: ', images:size(1)..' x '..images:size(2) ..' x '..images:size(3)..' x '..images:size(4))
-images:add(1):mul(0.5)
-print('Min, Max, Mean, Stdv', images:min(), images:max(), images:mean(), images:std())
-image.save(opt.name .. '.png', image.toDisplayTensor(images))
-print('Saved image to: ', opt.name .. '.png')
-
-if opt.display then
-    disp = require 'display'
-    disp.image(images)
-    print('Displayed image')
+feedAndSave()
+function vis()
+	print(noise:size())
+	-- noise = noise:view(noise:size(1))
 end
