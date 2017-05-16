@@ -1,5 +1,6 @@
 require 'image'
 require 'nn'
+require "lfs"
 util = paths.dofile('util.lua')
 torch.setdefaulttensortype('torch.FloatTensor')
 
@@ -98,19 +99,29 @@ elseif opt.noisemode == 'linefull' then
     assert(opt.batchSize == 1, 'for linefull mode, give batchSize(1) and imsize > 1')
     line  = torch.linspace(0, 1, opt.imsize)
     for i = 1, opt.imsize do
-        noise:narrow(3, i, 1):narrow(4, i, 1):copy(noiseL * line[i] + noiseR * (1 - line[i]))
+        noise:narrow(3, i, 1):narrow(4, i, 1):copy(noiseL * (line[i]) + noiseR * (1 - line[i]))
+    	print(line[i]*0.001)
     end
 
     print(noise:size())
 elseif opt.noisemode == 'adam' then
 
+	numRand = 80
+	classes = {}
+	for i = 1, numRand do
+		table.insert(classes,i,i)
+	end
 
+	table.insert(classes, table.getn(classes), 1)
+	-- table.insert(classes, table.getn(classes)-1, 1)
 
-	classes = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 1}
-	steps = 10 
-	num_buffer_classes = 1
-	bymb = get_buffer_y(steps, num_buffer_classes, 1)
-	offset = bymb:size(1)
+	--classes = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 1, 1}
+	
+	--classes = {1, 2, 3, 4, 5, 1, 1}
+	steps = 55 
+	--num_buffer_classes = 1
+	--bymb = get_buffer_y(steps, num_buffer_classes, 1)
+	offset = 0--bymb:size(1)
 
 
 	numTargets = table.getn(classes)
@@ -128,6 +139,7 @@ elseif opt.noisemode == 'adam' then
 
 	for i = 1, numTargets do
 		y1 = classes[i]
+
 		y2 = classes[math.fmod(((i)+1), numTargets)]
 		if y2 == nil then
 			 y2 = classes[1]
@@ -136,24 +148,25 @@ elseif opt.noisemode == 'adam' then
 		for j =1, steps do
 			
 			y = 1 + steps * (i-1) + (j-1)
-			print (y)
-			-- if y < ymb:size(1) then
+			 if y < ymb:size(1) then
 				ymb[y] = torch.Tensor(ny):fill(0)
 				if y1 == y2 then
 					ymb[y] = torch.Tensor(ny):zero()
 				else
 					-- print(y)
-					ymb[y][y1] = 1.0 - (j) / (steps-1.0)
-					ymb[y][y2] = (j) / (steps - 1.0)
+					ymb[y][y1] = 1.0 - (j-1) / (steps-1.0)
+					ymb[y][y2] = (j-1) / (steps - 1.0)
 				end
-			-- end
+			 end
 		end
 		-- print(y2)
 	end
 
-	-- print(ymb)
-	ymb = ymb:resize(ymb:size(1), ymb:size(2), 1, 1)
+	 
+	ymb = ymb:resize(ymb:size(1)-steps*2, ymb:size(2), 1, 1)
 	-- print (offset)
+	print(ymb:size())
+	noise = ymb
 end
 local inc = 0
 
@@ -165,7 +178,7 @@ function feedAndSave()
 	    net:cuda()
 	    util.cudnn(net)
 	    noise = noise:cuda()
-	    ymb = ymb:cuda()
+	    -- ymb = ymb:cuda()
 	else
 	   net:float()
 	end
@@ -174,7 +187,7 @@ function feedAndSave()
 	-- this drastically reduces the memory needed to generate samples
 	util.optimizeInferenceMemory(net)
 
-	local images = net:forward(ymb)
+	local images = net:forward(noise)
 	--images = images:view(images:size(1), 1, images:size(2), images:size(3))
 	print(images:size())
 	print('Images size: ', images:size(1)..' x '..images:size(2) ..' x '..images:size(3)..' x '..images:size(4))
@@ -184,8 +197,16 @@ function feedAndSave()
 	local ts = os.time()
 	local tss = string.format(os.date('%Y-%m-%d-%H-%M-%S', ts))
 	local fileCount = string.format("%05d", inc)
-	image.save("savedImages/" .. tss .. '.png', image.toDisplayTensor(images))
+
+	image.save("savedImages/" .. tss .. '.png', image.toDisplayTensor({input=images}))
 	--print('Saved image to: ', opt.name .. '.png')
+	os.execute("mkdir " .. "savedImages/frames/" .. tss)
+	if opt.noisemode == 'adam' then
+		for i = 1, images:size(1) do
+			num = string.format("%05d", i)
+			image.save("savedImages/frames/" .. tss .. '/' .. num .. '.png', image.toDisplayTensor(images[i]))
+		end
+	end 
 
 	if opt.display then
 	    disp = require 'display'
