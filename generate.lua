@@ -4,7 +4,7 @@ local optnet = require 'optnet'
 torch.setdefaulttensortype('torch.FloatTensor')
 
 opt = {
-    batchSize = 32,        -- number of samples to produce
+    batchSize = 1,        -- number of samples to produce
     noisetype = 'normal',  -- type of noise distribution (uniform / normal).
     net = '',              -- path to the generator network
     imsize = 1,            -- used to produce larger images. 1 = 64px. 2 = 80px, 3 = 96px, ...
